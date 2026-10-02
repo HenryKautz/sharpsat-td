@@ -36,7 +36,9 @@ available on macOS. Note that `./setupdev.sh` overwrites the checked-in Linux bi
 `sharpSAT` looks for `flow_cutter_pace17` in `$SHARPSAT_FLOWCUTTER`, then beside its own
 executable, then in the working directory, so it can be installed anywhere as long as the two
 binaries stay together. Flowcutter is stopped in-process after `-decot` seconds rather than with
-`timeout(1)`, which macOS lacks.
+`timeout(1)`, which macOS lacks. If `sharpSAT` itself receives SIGTERM, SIGINT or SIGHUP while
+the decomposition is running (a caller's timeout, say), it kills flowcutter and deletes the two
+temp files before dying of the signal; a signal it inherited as ignored (`nohup`) stays ignored.
 
 # Running
 

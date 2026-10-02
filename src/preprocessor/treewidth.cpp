@@ -74,6 +74,62 @@ string FlowCutterBinary() {
 // Seconds flowcutter gets to exit after SIGTERM before it is sent SIGKILL.
 const int kKillGrace = 5;
 
+// If sharpSAT itself is told to stop (SIGTERM, as a caller's timeout sends,
+// SIGINT or SIGHUP) while the decomposition is being computed, it must not leave
+// flowcutter running -- in its own process group, nothing else would stop it
+// before its alarm backstop -- nor the two temp files.  The handler does only
+// async-signal-safe things: kill, unlink, then re-raise with the default action
+// so the exit status still says which signal it was.  The state it reads is set
+// up before the handler is installed and is plain data (paths copied into fixed
+// buffers), since a handler cannot touch std::string.
+volatile sig_atomic_t g_fc_pid = 0;
+char g_tmp1[PATH_MAX] = "";
+char g_tmp2[PATH_MAX] = "";
+const int kGuardedSignals[] = {SIGTERM, SIGINT, SIGHUP};
+
+extern "C" void CleanupAndReraise(int sig) {
+  pid_t pid = g_fc_pid;
+  if (pid > 0) kill(-pid, SIGKILL);
+  if (g_tmp1[0]) unlink(g_tmp1);
+  if (g_tmp2[0]) unlink(g_tmp2);
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
+
+// Installs CleanupAndReraise for the lifetime of the temp files, and restores
+// whatever was there before when it goes out of scope.  A signal that was
+// IGNORED when sharpSAT started is left ignored: that is how nohup works
+// (SIGHUP), and how a shell starts background jobs (SIGINT), and catching it
+// would make sharpSAT die of a signal its caller asked it to survive.
+class TempFileGuard {
+ public:
+  TempFileGuard(const string& tmp1, const string& tmp2) {
+    snprintf(g_tmp1, sizeof(g_tmp1), "%s", tmp1.c_str());
+    snprintf(g_tmp2, sizeof(g_tmp2), "%s", tmp2.c_str());
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = CleanupAndReraise;
+    sigemptyset(&sa.sa_mask);
+    for (size_t i = 0; i < kN; i++) {
+      sigaction(kGuardedSignals[i], nullptr, &old_[i]);
+      installed_[i] = old_[i].sa_handler != SIG_IGN;
+      if (installed_[i]) sigaction(kGuardedSignals[i], &sa, nullptr);
+    }
+  }
+  ~TempFileGuard() {
+    for (size_t i = 0; i < kN; i++) {
+      if (installed_[i]) sigaction(kGuardedSignals[i], &old_[i], nullptr);
+    }
+    g_fc_pid = 0;
+    g_tmp1[0] = 0;
+    g_tmp2[0] = 0;
+  }
+ private:
+  static const size_t kN = sizeof(kGuardedSignals) / sizeof(int);
+  struct sigaction old_[kN];
+  bool installed_[kN];
+};
+
 // Waits for pid, retrying on EINTR.
 int WaitFor(pid_t pid) {
   int status = 0;
@@ -147,6 +203,7 @@ void RunFlowCutter(const string& binary, double time, const string& in_file, con
     _exit(127);
   }
   setpgid(pid, 0);  // also in the parent, so kill(-pid) cannot race the child
+  g_fc_pid = pid;   // only now, so the signal handler never kills a group that is not there yet
   close(report[1]);
   int msg[2];
   ssize_t got;
@@ -154,6 +211,7 @@ void RunFlowCutter(const string& binary, double time, const string& in_file, con
   close(report[0]);
   if (got == (ssize_t)sizeof(msg)) {
     WaitFor(pid);
+    g_fc_pid = 0;
     // msg[0] is the step that failed, in the order the child attempts them.
     const string what[] = {"open " + in_file, "create " + out_file, "open /dev/null", "run " + binary};
     cerr << "c o could not " << what[msg[0]] << ": " << strerror(msg[1]);
@@ -188,6 +246,9 @@ void RunFlowCutter(const string& binary, double time, const string& in_file, con
     }
     usleep(10000);
   }
+  // Reaped: its pid (and so its group id) may now be reused, so the signal
+  // handler must stop aiming at it.
+  g_fc_pid = 0;
   if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return;
   if (terminated && WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM) return;
   cerr << "c o " << binary << " failed (status " << status << ")" << endl;
@@ -225,6 +286,9 @@ TreeDecomposition Treedecomp(const Graph& graph, double time, string tmp_dir) {
 	int m = es.size();
 	string tmp1 = TmpInstance(n, m, 1, tmp_dir);
 	string tmp2 = TmpInstance(n, m, 2, tmp_dir);
+	// From here until both files are removed, a SIGTERM/SIGINT/SIGHUP cleans up
+	// flowcutter and the files before sharpSAT dies of it.
+	TempFileGuard guard(tmp1, tmp2);
 	std::ofstream out(tmp1);
 	out<<"p tw "<<n<<" "<<m<<'\n';
 	for (auto e : es) {
