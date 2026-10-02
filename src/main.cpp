@@ -73,7 +73,9 @@ void PrintLog10(const mpfr::mpreal& num) {
 }
 
 void PrintExact(const mpz_class& num) {
-  cout<<"c s exact arb int "<<num<<endl;
+  // get_str() rather than operator<<: the latter lives in libgmpxx, which on
+  // macOS Homebrew is built against libc++ and so cannot link with g++.
+  cout<<"c s exact arb int "<<num.get_str()<<endl;
 }
 
 void PrintExact(const mpfr::mpreal& num) {
@@ -114,7 +116,7 @@ int main(int argc, char *argv[]) {
         cout << " wrong parameters" << endl;
         return -1;
       }
-      tmp_dir = string(argv[i+1]);
+      tmp_dir = string(argv[++i]);
     } else if (strcmp(argv[i], "-cs") == 0) {
       if (argc <= i + 1) {
         cout << " wrong parameters" << endl;

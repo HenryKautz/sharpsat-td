@@ -26,6 +26,18 @@ To compile and link statically use
 
 The binaries sharpSAT and flow_cutter_pace17 will be copied to the [bin/](https://github.com/Laakeri/sharpsat-td/tree/main/bin) directory.
 
+## macOS
+
+This fork also builds on macOS, including Apple Silicon (`brew install gcc gmp mpfr cmake`).
+Use `./setupdev.sh`, which selects the newest Homebrew `g++-N`; on macOS, CMake refuses clang
+(including the `/usr/bin/g++` shim) unless given `-DALLOW_CLANG=ON`. Static linking is not
+available on macOS. Note that `./setupdev.sh` overwrites the checked-in Linux binaries in `bin/`.
+
+`sharpSAT` looks for `flow_cutter_pace17` in `$SHARPSAT_FLOWCUTTER`, then beside its own
+executable, then in the working directory, so it can be installed anywhere as long as the two
+binaries stay together. Flowcutter is stopped in-process after `-decot` seconds rather than with
+`timeout(1)`, which macOS lacks.
+
 # Running
 
 The currently supported input/output formats are those of [Model counting competition 2024](https://mccompetition.org/assets/files/mccomp_format_24.pdf).
