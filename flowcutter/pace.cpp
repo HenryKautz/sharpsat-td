@@ -380,10 +380,20 @@ void test_new_order(const ArrayIDIDFunc&order){
 
 
 int main(int argc, char*argv[]){
-	signal(SIGTERM, signal_handler);
-	signal(SIGINT, signal_handler);
-
-	signal(SIGSEGV, signal_handler);
+	// Every way of being told to stop prints the best decomposition so far and
+	// exits 0.  SIGALRM is among them: sharpSAT arms an alarm before exec as a
+	// backstop in case its own SIGTERM never takes effect, and a decomposition
+	// is more use to it than a process killed by the alarm (which sharpSAT once
+	// had to treat as a failed count).  sigaction, not signal(), so the handler
+	// stays installed and the semantics are the same on Linux and macOS.
+	{
+		struct sigaction sa;
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_handler = signal_handler;
+		sigemptyset(&sa.sa_mask);
+		for(int sig : {SIGTERM, SIGINT, SIGHUP, SIGALRM, SIGSEGV})
+			sigaction(sig, &sa, nullptr);
+	}
 	try{
 		{
 			string file_name = "-";

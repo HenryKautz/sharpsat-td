@@ -156,7 +156,14 @@ int WaitFor(pid_t pid) {
 // flowcutter installs its handler, and a wrapper shell dies of it after
 // flowcutter has reported. Whether out_file holds a decomposition is for the
 // caller to check. Setup failures (missing binary, unwritable tmpdir) are fatal.
-void RunFlowCutter(const string& binary, double time, const string& in_file, const string& out_file) {
+//
+// Returns false when out_file must NOT be read: flowcutter did not stop on our
+// SIGTERM and had to be killed (or died of its alarm backstop), so the file may
+// hold nothing or a partial write.  That is not a failed count -- the caller
+// falls back to a single bag, which is slower but exact.  (A SharpSAT-TD run on
+// a loaded Mac once failed outright this way: no exit within 5 s of SIGTERM,
+// then death by SIGALRM.)
+bool RunFlowCutter(const string& binary, double time, const string& in_file, const string& out_file) {
   // The child reports a setup failure as (step, errno) through this pipe; a
   // successful exec closes it (FD_CLOEXEC), so the parent reads EOF.
   int report[2];
@@ -177,8 +184,9 @@ void RunFlowCutter(const string& binary, double time, const string& in_file, con
 #ifdef __linux__
     prctl(PR_SET_PDEATHSIG, SIGKILL);
 #endif
-    // Backstop if sharpSAT dies before the deadline: the alarm survives exec,
-    // and flowcutter does not handle SIGALRM, so it is killed by it.
+    // Backstop if sharpSAT dies before the deadline, or its SIGTERM never takes
+    // effect: the alarm survives exec, and flowcutter stops on SIGALRM as on
+    // SIGTERM (prints its best decomposition, exits 0).
     alarm((unsigned)time + 2 * kKillGrace + 1);
     int step = 0;
     int in = open(in_file.c_str(), O_RDONLY);
@@ -249,8 +257,12 @@ void RunFlowCutter(const string& binary, double time, const string& in_file, con
   // Reaped: its pid (and so its group id) may now be reused, so the signal
   // handler must stop aiming at it.
   g_fc_pid = 0;
-  if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return;
-  if (terminated && WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM) return;
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return true;
+  if (terminated && WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM) return true;
+  if (terminated) {
+    cerr << "c o flowcutter did not stop cleanly (status " << status << "); discarding its output" << endl;
+    return false;
+  }
   cerr << "c o " << binary << " failed (status " << status << ")" << endl;
   Fail(in_file, out_file);
 }
@@ -299,7 +311,12 @@ TreeDecomposition Treedecomp(const Graph& graph, double time, string tmp_dir) {
 	cout<<"c o Primal edges "<<es.size()<<endl;
 	string tw_binary = FlowCutterBinary();
 	cout << "c o CMD: " << tw_binary << " <" << tmp1 << " >" << tmp2 << " (SIGTERM after " << time << "s)" << endl;
-	RunFlowCutter(tw_binary, time, tmp1, tmp2);
+	if (!RunFlowCutter(tw_binary, time, tmp1, tmp2)) {
+		std::remove(tmp1.c_str());
+		std::remove(tmp2.c_str());
+		cout << "c o flowcutter was killed; using a single bag" << endl;
+		return TrivialDecomposition(n);
+	}
 	cout << "c o tw finish ok" << endl;
 	TreeDecomposition dec(0, 0);
 	bool found = false;
