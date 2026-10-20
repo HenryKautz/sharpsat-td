@@ -327,7 +327,9 @@ void signal_handler(int)
 	if(x != 0)
 		ignore_return_value(write(STDOUT_FILENO, x, strlen(x)));
 	else
-		ignore_return_value(write(STDOUT_FILENO, no_decomposition_message, sizeof(no_decomposition_message)));
+		// sizeof - 1: not the string's terminating NUL, which sharpSAT's reader
+		// took for a line and failed to parse (std::stoi), aborting the count
+		ignore_return_value(write(STDOUT_FILENO, no_decomposition_message, sizeof(no_decomposition_message) - 1));
 
 	_Exit(EXIT_SUCCESS);
 }

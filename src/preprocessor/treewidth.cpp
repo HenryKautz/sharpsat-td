@@ -320,12 +320,16 @@ TreeDecomposition Treedecomp(const Graph& graph, double time, string tmp_dir) {
 	cout << "c o tw finish ok" << endl;
 	TreeDecomposition dec(0, 0);
 	bool found = false;
+	bool malformed = false;
 	std::ifstream in(tmp2);
 	string tmp;
 	int claim_width = 0;
 	while (getline(in, tmp)) {
+		// A NUL is not text: flowcutter's "no decomposition" message used to end
+		// in one, and the line it made was handed to stoi, which threw.
+		tmp.erase(std::remove(tmp.begin(), tmp.end(), '\0'), tmp.end());
 		std::stringstream ss(tmp);
-		ss>>tmp;
+		if (!(ss>>tmp)) continue;   // a blank line
 		if (tmp == "c") continue;
 		if (tmp == "s") {
 			ss>>tmp;
@@ -346,15 +350,25 @@ TreeDecomposition Treedecomp(const Graph& graph, double time, string tmp_dir) {
 			}
 			dec.SetBag(bid, bag);
 		} else {
-			int a = stoi(tmp);
-			int b;
-			ss>>b;
+			// An edge line is two vertex numbers.  Anything else (a partial
+			// line, stray bytes) means the output cannot be trusted: fall back
+			// to one bag, which is slower but exact, rather than abort the count.
+			int a, b;
+			std::stringstream es(tmp);
+			if (!(es >> a) || !(ss >> b) || !es.eof()) {
+				malformed = true;
+				break;
+			}
 			dec.AddEdge(a, b);
 		}
 	}
 	in.close();
 	std::remove(tmp1.c_str());
 	std::remove(tmp2.c_str());
+	if (malformed) {
+		cout << "c o flowcutter output not understood; using a single bag" << endl;
+		return TrivialDecomposition(n);
+	}
 	// No decomposition: flowcutter was stopped before its first one (it still
 	// exits 0, or was killed before installing its handler), or it threw.
 	if (!found) {
