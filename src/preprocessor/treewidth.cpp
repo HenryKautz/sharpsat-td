@@ -318,13 +318,19 @@ TreeDecomposition Treedecomp(const Graph& graph, double time, string tmp_dir) {
 		return TrivialDecomposition(n);
 	}
 	cout << "c o tw finish ok" << endl;
+	// The output is checked line by line, and anything that does not parse as a
+	// PACE .td -- a partial line from an interrupted write, stray bytes, a bag
+	// or edge out of range -- makes it untrusted: the count then uses one bag,
+	// slower but exact, instead of reading an uninitialised value or tripping
+	// one of the asserts (which are live in this build) that abort the count.
 	TreeDecomposition dec(0, 0);
 	bool found = false;
 	bool malformed = false;
 	std::ifstream in(tmp2);
 	string tmp;
-	int claim_width = 0;
-	while (getline(in, tmp)) {
+	int claim_width = 0, bs = 0;
+	vector<char> bag_seen;
+	while (!malformed && getline(in, tmp)) {
 		// A NUL is not text: flowcutter's "no decomposition" message used to end
 		// in one, and the line it made was handed to stoi, which threw.
 		tmp.erase(std::remove(tmp.begin(), tmp.end(), '\0'), tmp.end());
@@ -332,30 +338,45 @@ TreeDecomposition Treedecomp(const Graph& graph, double time, string tmp_dir) {
 		if (!(ss>>tmp)) continue;   // a blank line
 		if (tmp == "c") continue;
 		if (tmp == "s") {
-			ss>>tmp;
-			assert(tmp == "td");
-			int bs,nn;
-			ss>>bs>>claim_width>>nn;
-			assert(nn == n);
+			// s td <bags> <width+1> <vertices>, once
+			int nn = 0;
+			if (found || !(ss>>tmp) || tmp != "td" || !(ss>>bs>>claim_width>>nn)
+			    || bs < 1 || nn != n) {
+				malformed = true;
+				break;
+			}
 			claim_width--;
 			dec = TreeDecomposition(bs, nn);
+			bag_seen.assign(bs+1, 0);
 			found = true;
 		} else if (tmp == "b") {
-			int bid;
-			ss>>bid;
+			// b <bag> <vertex>..., after the s line, each bag once, all in range
+			int bid = 0;
+			if (!found || !(ss>>bid) || bid < 1 || bid > bs || bag_seen[bid]) {
+				malformed = true;
+				break;
+			}
 			vector<int> bag;
 			int v;
 			while (ss>>v) {
+				if (v < 1 || v > n) {
+					malformed = true;
+					break;
+				}
 				bag.push_back(v-1);
 			}
+			if (malformed || !ss.eof()) {   // !eof: a token that was not a number
+				malformed = true;
+				break;
+			}
+			bag_seen[bid] = 1;
 			dec.SetBag(bid, bag);
 		} else {
-			// An edge line is two vertex numbers.  Anything else (a partial
-			// line, stray bytes) means the output cannot be trusted: fall back
-			// to one bag, which is slower but exact, rather than abort the count.
+			// An edge line is two distinct bag numbers, after the s line.
 			int a, b;
-			std::stringstream es(tmp);
-			if (!(es >> a) || !(ss >> b) || !es.eof()) {
+			std::stringstream first(tmp);
+			if (!found || !(first >> a) || !first.eof() || !(ss >> b)
+			    || a < 1 || a > bs || b < 1 || b > bs || a == b) {
 				malformed = true;
 				break;
 			}
@@ -375,9 +396,13 @@ TreeDecomposition Treedecomp(const Graph& graph, double time, string tmp_dir) {
 		cout << "c o flowcutter produced no decomposition; using a single bag" << endl;
 		return TrivialDecomposition(n);
 	}
-	assert(dec.Width() <= claim_width);
+	// A well-formed file can still describe no valid decomposition (a missing
+	// bag, an uncovered edge, a broken tree): checked, not asserted.
+	if (dec.Width() > claim_width || !dec.Verify(graph)) {
+		cout << "c o flowcutter's decomposition is not valid; using a single bag" << endl;
+		return TrivialDecomposition(n);
+	}
 	cout << "c o width " << dec.Width() << endl;
-	assert(dec.Verify(graph));
 	return dec;
 }
 } // namespace decomp
